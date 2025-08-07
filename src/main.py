@@ -130,16 +130,41 @@ class FileList(QListWidget):
         else:
             event.ignore()
 
+    # --- THIS METHOD IS NOW MODIFIED TO HANDLE .big FILES ---
     def dropEvent(self, event):
         md = event.mimeData()
-        if md.hasUrls():
-            for url in md.urls():
-                local_file = url.toLocalFile()
-                if os.path.isfile(local_file):
-                    self.add_file(local_file, ask_name=True)
-                else:
-                    self.add_folder(local_file)
+        if not md.hasUrls():
+            return
+
+        local_paths = [url.toLocalFile() for url in md.urls()]
+        
+        # Check if any of the dropped files is a .big archive
+        big_files = [path for path in local_paths if path.lower().endswith('.big') and os.path.isfile(path)]
+
+        if big_files:
+            # A .big file was dropped. Prioritize opening it.
+            big_file_to_open = big_files[0]
+            
+            # If other files were dropped alongside the .big, inform the user they will be ignored.
+            if len(local_paths) > 1:
+                QMessageBox.information(self, "Opening Archive", 
+                                        f"Opening '{os.path.basename(big_file_to_open)}'.\n\n"
+                                        "Other dropped files and folders will be ignored.")
+
+            # Call the main window's open method
+            self.main._open(big_file_to_open)
             event.acceptProposedAction()
+            return # Stop further processing
+
+        # If we get here, no .big files were dropped. Proceed with the original "add to archive" logic.
+        for path in local_paths:
+            if os.path.isfile(path):
+                self.add_file(path, ask_name=True)
+            elif os.path.isdir(path):
+                self.add_folder(path)
+        
+        event.acceptProposedAction()
+
 
     def _add_file(self, url, name, blank=False, skip_all=False):
         ret = None
@@ -338,7 +363,9 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("CTRL+N"), self, self.new)
         QShortcut(QKeySequence("CTRL+O"), self, self.open)
         QShortcut(QKeySequence("CTRL+S"), self, self.save)
-        QShortcut(QKeySequence("Ctrl+Shift+W"), self, self.close_archive)
+        # THIS IS THE FIX: The QShortcut for Ctrl+Shift+W is removed from here
+        # because the QAction in create_menu already handles it.
+        # QShortcut(QKeySequence("Ctrl+Shift+W"), self, self.close_archive) # <-- REMOVED THIS CONFLICTING LINE
         QShortcut(QKeySequence("CTRL+SHIFT+S"), self, self.save_editor)
         QShortcut(QKeySequence("CTRL+F"), self, self.search_file)
         QShortcut(QKeySequence("CTRL+W"), self, self.close_tab_shortcut)
@@ -355,7 +382,7 @@ class MainWindow(QMainWindow):
         self._update_recent_files_menu()
 
         self.close_action = file_menu.addAction("Close", self.close_archive)
-        self.close_action.setShortcut("Ctrl+Shift+W")
+        self.close_action.setShortcut("Ctrl+Shift+W") # This is the single, correct definition
         file_menu.addSeparator()
 
         self.save_action = file_menu.addAction("Save", self.save)
@@ -436,7 +463,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{os.path.basename(name)} [{archive_type}] - {self.base_name}")
 
     def close_archive(self):
-        if not self.close_unsaved():
+        if hasattr(self, 'archive') and not self.close_unsaved():
             return False
         self.archive = None
         self.path = None
